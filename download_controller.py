@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -75,6 +76,107 @@ class DownloadType(Enum):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  Download Metrics Tracker (Duration, Avg Speed, Peak Speed)
+# ════════════════════════════════════════════════════════════════════════
+
+METRICS_CACHE_FILE = Path.home() / ".aria2" / "hydownload_metrics.json"
+
+
+class DownloadMetricsTracker:
+    """Tracks start time, duration, peak speed, and average speed per GID, persisting across sessions."""
+
+    def __init__(self, cache_file: Path = METRICS_CACHE_FILE):
+        self.cache_file = cache_file
+        self._metrics: dict[str, dict] = {}
+        self._load()
+
+    def _load(self):
+        try:
+            if self.cache_file.exists():
+                with open(self.cache_file, "r", encoding="utf-8") as f:
+                    self._metrics = json.load(f)
+        except Exception as e:
+            logger.warning("Could not load download metrics cache: %s", e)
+
+    def _save(self):
+        try:
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.cache_file, "w", encoding="utf-8") as f:
+                json.dump(self._metrics, f, indent=2)
+        except Exception as e:
+            logger.warning("Could not save download metrics cache: %s", e)
+
+    def update(
+        self,
+        gid: str,
+        speed: int,
+        done: int,
+        total: int,
+        is_meta: bool,
+        is_complete: bool,
+    ) -> tuple[float, int, int]:
+        """
+        Record real-time progress sample and return (duration_seconds, avg_speed, max_speed).
+        """
+        if is_meta or not gid:
+            return 0.0, 0, 0
+
+        now = time.time()
+        record = self._metrics.get(gid)
+
+        if not record:
+            record = {
+                "start_time": now if (speed > 0 or done > 0) else 0.0,
+                "finish_time": None,
+                "max_speed": speed,
+                "total_bytes": total,
+                "completed_bytes": done,
+            }
+            self._metrics[gid] = record
+        else:
+            if record.get("start_time", 0.0) <= 0.0 and (speed > 0 or done > 0):
+                record["start_time"] = now
+
+            if speed > record.get("max_speed", 0):
+                record["max_speed"] = speed
+
+            record["total_bytes"] = total
+            record["completed_bytes"] = done
+
+        start = record.get("start_time", 0.0)
+        if start <= 0.0:
+            start = now
+
+        # Handle completion
+        if is_complete and record.get("finish_time") is None:
+            record["finish_time"] = now
+            self._save()
+
+        finish = record.get("finish_time")
+        duration = max(0.0, (finish - start) if finish else (now - start))
+
+        # Calculate average download speed across duration
+        if duration > 0 and done > 0:
+            avg_speed = int(done / duration)
+        else:
+            avg_speed = 0
+
+        max_speed = record.get("max_speed", 0)
+        return duration, avg_speed, max_speed
+
+    def get_metrics(self, gid: str) -> tuple[float, int, int]:
+        record = self._metrics.get(gid)
+        if not record:
+            return 0.0, 0, 0
+        start = record.get("start_time", 0.0)
+        finish = record.get("finish_time")
+        duration = max(0.0, (finish - start) if finish else (time.time() - start if start > 0 else 0.0))
+        done = record.get("completed_bytes", 0)
+        avg = int(done / duration) if duration > 0 and done > 0 else 0
+        return duration, avg, record.get("max_speed", 0)
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  Real-Time Stats Dataclass
 # ════════════════════════════════════════════════════════════════════════
 
@@ -98,12 +200,19 @@ class DownloadStats:
     error_message: str = ""
     is_metadata: bool = False
     followed_by: list[str] = field(default_factory=list)
+    duration_seconds: float = 0.0  # Elapsed time actively downloading
+    avg_speed: int = 0             # Average download speed in bytes/s
+    max_speed: int = 0             # Maximum recorded download speed in bytes/s
 
     # ── Convenience properties ──────────────────────────────────────
 
     @property
     def is_complete(self) -> bool:
-        return self.status == "complete"
+        return self.status == "complete" or (
+            self.total_bytes > 0
+            and self.completed_bytes >= self.total_bytes
+            and not self.is_metadata
+        )
 
     @property
     def is_error(self) -> bool:
@@ -111,7 +220,7 @@ class DownloadStats:
 
     @property
     def is_active(self) -> bool:
-        return self.status in ("active", "waiting")
+        return self.status in ("active", "waiting") and not self.is_complete
 
     @property
     def download_speed_human(self) -> str:
@@ -142,6 +251,32 @@ class DownloadStats:
         m = rem // 60
         return f"{h}h {m}m"
 
+    @property
+    def duration_human(self) -> str:
+        s = int(self.duration_seconds)
+        if s <= 0:
+            return "—"
+        if s < 60:
+            return f"{s}s"
+        if s < 3600:
+            return f"{s // 60}m {s % 60:02d}s"
+        h, rem = divmod(s, 3600)
+        m = rem // 60
+        sec = rem % 60
+        return f"{h}h {m:02d}m {sec:02d}s"
+
+    @property
+    def avg_speed_human(self) -> str:
+        if self.avg_speed <= 0:
+            return "—"
+        return self._humanize_speed(self.avg_speed)
+
+    @property
+    def max_speed_human(self) -> str:
+        if self.max_speed <= 0:
+            return "—"
+        return self._humanize_speed(self.max_speed)
+
     @staticmethod
     def _humanize_speed(bps: int) -> str:
         for unit in ("B/s", "KB/s", "MB/s", "GB/s"):
@@ -169,6 +304,7 @@ class DownloadController:
     def __init__(self, engine: Aria2Engine) -> None:
         self._engine = engine
         self._api: aria2p.API = engine.client
+        self.metrics = DownloadMetricsTracker()
 
     # ── Add Downloads ───────────────────────────────────────────────
 
@@ -295,8 +431,7 @@ class DownloadController:
 
     # ── Private ─────────────────────────────────────────────────────
 
-    @staticmethod
-    def _make_stats(dl: aria2p.Download) -> DownloadStats:
+    def _make_stats(self, dl: aria2p.Download) -> DownloadStats:
         """Convert an aria2p.Download into our immutable stats object."""
         total = dl.total_length
         done  = dl.completed_length
@@ -312,11 +447,13 @@ class DownloadController:
         # BitTorrent peer info
         num_seeders = 0
         num_peers   = 0
+        is_seeder   = False
         try:
             if dl.bittorrent:
                 num_seeders = getattr(dl, "num_seeders", 0) or 0
                 # Connections for BT means peers
                 num_peers = dl.connections or 0
+                is_seeder = getattr(dl, "seeder", False) is True
         except Exception:
             pass
 
@@ -340,6 +477,14 @@ class DownloadController:
         status = dl.status
         if is_meta and status in ("active", "waiting"):
             status = "fetching metadata"
+        elif not is_meta and ((total > 0 and done >= total) or is_seeder):
+            # 100% finished — mark as complete
+            status = "complete"
+            if is_seeder and dl.status == "active":
+                try:
+                    dl.pause()
+                except Exception:
+                    pass
 
         followed = []
         raw_followed = getattr(dl, "followed_by", []) or []
@@ -348,6 +493,17 @@ class DownloadController:
                 followed.append(str(f.gid))
             elif isinstance(f, str):
                 followed.append(f)
+
+        is_complete = (status == "complete") or (not is_meta and total > 0 and done >= total)
+
+        duration, avg_speed, max_speed = self.metrics.update(
+            gid=dl.gid,
+            speed=speed,
+            done=done,
+            total=total,
+            is_meta=is_meta,
+            is_complete=is_complete,
+        )
 
         return DownloadStats(
             gid=dl.gid,
@@ -366,6 +522,9 @@ class DownloadController:
             error_message=error_msg,
             is_metadata=is_meta,
             followed_by=followed,
+            duration_seconds=duration,
+            avg_speed=avg_speed,
+            max_speed=max_speed,
         )
 
 

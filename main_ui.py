@@ -88,9 +88,10 @@ COL_SIZE = 1
 COL_PROGRESS = 2
 COL_SPEED = 3
 COL_ETA = 4
-COL_PEERS = 5
-COL_STATUS = 6
-QUEUE_COLUMNS = ["File Name", "Size", "Progress", "Speed", "ETA", "Peers / Conn", "Status"]
+COL_STATS = 5
+COL_PEERS = 6
+COL_STATUS = 7
+QUEUE_COLUMNS = ["File Name", "Size", "Progress", "Speed", "ETA / Time Taken", "Avg / Peak Speed", "Peers / Conn", "Status"]
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -231,6 +232,86 @@ class AddDownloadDialog(QDialog):
         except ValueError:
             self.lbl_type.setText("Enter a valid URL or torrent file")
             self.lbl_type.setStyleSheet("color: #888;")
+
+
+class DownloadDetailsDialog(QDialog):
+    """Detailed inspector for a download's statistics and file properties."""
+
+    def __init__(self, parent: QWidget, stats: DownloadStats):
+        super().__init__(parent)
+        self.setWindowTitle(f"Download Details — {stats.name}")
+        self.setMinimumWidth(540)
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        # File Name
+        lbl_name = QLabel(stats.name)
+        lbl_name.setWordWrap(True)
+        lbl_name.setStyleSheet("font-weight: bold; font-size: 13px;")
+        form.addRow("File Name:", lbl_name)
+
+        # Status
+        status_color = "#2ea043" if stats.is_complete else ("#da3633" if stats.is_error else "#1f6feb")
+        lbl_status = QLabel(stats.status.capitalize())
+        lbl_status.setStyleSheet(f"font-weight: bold; color: {status_color}; font-size: 13px;")
+        form.addRow("Status:", lbl_status)
+
+        # Progress / Size
+        if stats.total_bytes > 0:
+            size_str = f"{stats.completed_human} / {stats.total_human} ({stats.progress:.1f}%)"
+        else:
+            size_str = "Fetching metadata..."
+        form.addRow("File Size:", QLabel(size_str))
+
+        # Time Taken (Duration)
+        dur_str = stats.duration_human if stats.duration_human != "—" else "In progress..."
+        lbl_duration = QLabel(f"⏱ {dur_str}")
+        lbl_duration.setStyleSheet("font-weight: bold; font-size: 13px;")
+        form.addRow("Time Taken:", lbl_duration)
+
+        # Average Download Speed
+        avg_str = stats.avg_speed_human if stats.avg_speed > 0 else "—"
+        form.addRow("Average Speed:", QLabel(avg_str))
+
+        # Maximum / Peak Speed
+        max_str = stats.max_speed_human if stats.max_speed > 0 else "—"
+        form.addRow("Peak (Max) Speed:", QLabel(max_str))
+
+        # Current Speed
+        cur_speed = stats.download_speed_human if not stats.is_complete else "—"
+        form.addRow("Current Speed:", QLabel(cur_speed))
+
+        # Connections / Peers
+        if stats.num_peers > 0 or stats.num_seeders > 0:
+            peer_info = f"{stats.num_peers} peers, {stats.num_seeders} seeders"
+        else:
+            peer_info = f"{stats.connections} active connection(s)"
+        form.addRow("Swarm / Conns:", QLabel(peer_info))
+
+        # Destination Path
+        dest_path = stats.files[0] if stats.files else str(DEFAULT_DOWNLOAD_DIR)
+        lbl_path = QLabel(dest_path)
+        lbl_path.setWordWrap(True)
+        lbl_path.setStyleSheet("font-family: monospace; font-size: 11px; color: #888;")
+        form.addRow("Destination:", lbl_path)
+
+        layout.addLayout(form)
+
+        # Action Buttons
+        btn_box = QHBoxLayout()
+        btn_reveal = QPushButton("📂 Reveal in Finder")
+        btn_reveal.clicked.connect(lambda: reveal_in_finder(dest_path))
+        btn_box.addWidget(btn_reveal)
+        btn_box.addStretch()
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+
+        layout.addSpacing(10)
+        layout.addLayout(btn_box)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -378,13 +459,14 @@ class MainWindow(QMainWindow):
 
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Stretch)
-        for col in (COL_SIZE, COL_SPEED, COL_ETA, COL_PEERS, COL_STATUS):
+        for col in (COL_SIZE, COL_SPEED, COL_ETA, COL_STATS, COL_PEERS, COL_STATUS):
             h.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(COL_PROGRESS, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(COL_PROGRESS, 200)
+        self.table.setColumnWidth(COL_PROGRESS, 180)
 
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self.table.itemDoubleClicked.connect(self._on_table_double_clicked)
 
         vbox_q.addWidget(self.table)
         self.tabs.addTab(self.tab_queue, "⚡ Downloads Queue")
@@ -627,12 +709,28 @@ class MainWindow(QMainWindow):
         if not self._selected_gids():
             return
         m = QMenu(self)
+        m.addAction("📊 View Download Statistics & Details", self._on_view_details_selected)
+        m.addSeparator()
         m.addAction("Pause", self._on_pause_selected)
         m.addAction("Resume", self._on_resume_selected)
         m.addSeparator()
         m.addAction("Reveal in Finder", self._on_reveal_selected)
         m.addAction("Delete", self._on_delete_selected)
         m.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _on_table_double_clicked(self, item):
+        self._on_view_details_selected()
+
+    def _on_view_details_selected(self):
+        gids = self._selected_gids()
+        if not gids:
+            return
+        try:
+            stats = self.ctrl.get_stats(gids[0])
+            dlg = DownloadDetailsDialog(self, stats)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.warning(self, "Details", f"Could not fetch details:\n{e}")
 
     # ── Multi-Part Archive Parser & Tree UI ─────────────────────────────
 
@@ -704,7 +802,8 @@ class MainWindow(QMainWindow):
             # Check for completion notification (only real files, not metadata)
             if s.is_complete and not s.is_metadata and s.gid not in self.last_completed_gids:
                 self.last_completed_gids.add(s.gid)
-                send_macos_notification("Download Complete", s.name, APP_NAME)
+                notif_msg = f"{s.name}\nCompleted in {s.duration_human} (Avg: {s.avg_speed_human}, Peak: {s.max_speed_human})"
+                send_macos_notification("Download Complete", notif_msg, APP_NAME)
 
         # Clean any removed metadata tasks from order
         self.gids_order = [g for g in self.gids_order if g not in meta_replaced]
@@ -726,13 +825,35 @@ class MainWindow(QMainWindow):
             if not p_item:
                 p_item = QTableWidgetItem()
                 self.table.setItem(row, COL_PROGRESS, p_item)
-            p_item.setData(Qt.ItemDataRole.UserRole, 0.0 if s.is_metadata else s.progress)
+            p_item.setData(Qt.ItemDataRole.UserRole, 0.0 if s.is_metadata else (100.0 if s.is_complete else s.progress))
 
-            self._set_cell(row, COL_SPEED, s.download_speed_human)
-            self._set_cell(row, COL_ETA, "—" if s.is_metadata else s.eta_human)
+            # Current Speed
+            if s.is_complete:
+                self._set_cell(row, COL_SPEED, "—")
+            else:
+                self._set_cell(row, COL_SPEED, s.download_speed_human)
+
+            # ETA / Time Taken Cell
+            if s.is_metadata:
+                self._set_cell(row, COL_ETA, "—")
+            elif s.is_complete:
+                self._set_cell(row, COL_ETA, f"⏱ {s.duration_human}" if s.duration_human != "—" else "Done")
+            else:
+                self._set_cell(row, COL_ETA, s.eta_human)
+
+            # Avg / Peak Speed Cell
+            if s.is_metadata:
+                stats_str = "—"
+            elif s.avg_speed > 0 or s.max_speed > 0:
+                stats_str = f"Avg: {s.avg_speed_human}  |  Peak: {s.max_speed_human}"
+            else:
+                stats_str = "—"
+            self._set_cell(row, COL_STATS, stats_str)
 
             if s.is_metadata:
                 peer_str = f"DHT:{s.num_peers} peers"
+            elif s.is_complete:
+                peer_str = "Completed"
             elif s.num_peers > 0:
                 peer_str = f"P:{s.num_peers} S:{s.num_seeders}"
             else:

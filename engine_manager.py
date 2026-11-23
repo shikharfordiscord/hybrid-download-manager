@@ -278,7 +278,8 @@ class Aria2Engine:
             f"--bt-tracker={','.join(DEFAULT_BT_TRACKERS)}",
             "--bt-enable-lpd=true",            # local peer discovery
             "--bt-max-peers=80",
-            "--seed-ratio=0.0",                # don't seed after completion
+            "--seed-time=0",                   # stop seeding immediately after download completes
+            "--seed-ratio=1.0",
             "--bt-save-metadata=true",
             "--follow-torrent=mem",            # parse .torrent in memory
 
