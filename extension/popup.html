@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>hydownload managers</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 16px;
+      width: 280px;
+      background: #f9f9fb;
+      color: #1e1e1e;
+    }
+    h3 {
+      margin: 0 0 12px 0;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+    .badge.online {
+      background: #e6f4ea;
+      color: #137333;
+    }
+    .badge.offline {
+      background: #fce8e6;
+      color: #c5221f;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 14px 0;
+      padding: 10px 12px;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .toggle-label {
+      font-weight: 500;
+      font-size: 13px;
+    }
+    .ext-list {
+      background: #fff;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 11px;
+      color: #555;
+      line-height: 1.5;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .footer {
+      margin-top: 12px;
+      text-align: center;
+      font-size: 11px;
+      color: #888;
+    }
+    /* Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #ccc;
+      transition: .2s;
+      border-radius: 20px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: #007aff;
+    }
+    input:checked + .slider:before {
+      transform: translateX(16px);
+    }
+  </style>
+</head>
+<body>
+  <h3>
+    hydownload managers
+    <span id="status-badge" class="badge offline">Checking...</span>
+  </h3>
+
+  <div class="toggle-row">
+    <span class="toggle-label">Browser Interception</span>
+    <label class="switch">
+      <input type="checkbox" id="toggle-enabled" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="ext-list">
+    <strong>Intercepted extensions:</strong><br>
+    .zip, .rar, .7z, .iso, .dmg, .pkg, .exe, .part*.rar, .001+
+  </div>
+
+  <div class="footer">
+    Port: 127.0.0.1:6801
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

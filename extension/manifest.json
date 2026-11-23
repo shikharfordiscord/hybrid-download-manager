@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "hydownload managers Interceptor",
+  "version": "1.0.0",
+  "description": "Intercepts large file downloads and split multi-part archives, sending them directly to your local hydownload managers application.",
+  "permissions": [
+    "downloads",
+    "storage",
+    "cookies"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:6801/*",
+    "http://localhost:6801/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "hydownload managers"
+  }
+}
