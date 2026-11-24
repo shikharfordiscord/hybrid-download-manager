@@ -45,6 +45,7 @@ A desktop download manager designed for macOS that combines high-concurrency mul
 
 - **Accelerated Transfers**: Splits downloads across up to 16 concurrent connections per server.
 - **BitTorrent & Magnet Transfers**: Built-in support for magnet links and `.torrent` files with DHT routing and active peer discovery.
+- **Download Analytics & Speed Telemetry**: Live duration countdown and completion time tracking with accurate average throughput and peak speed monitoring, visible directly in the queue table, macOS completion notifications, and an inspector dialog (double-click or right-click any item).
 - **Split Archive Automation**: Parses multi-part archives (`.part01.rar` ... `.partN.rar`, `.001` ... `.030`), queues them sequentially or concurrently, verifies hashes (`SHA-256`, `MD5`), and auto-extracts contents via `7zz`.
 - **Browser Catcher**: Local background service captures incoming transfers directly from Chromium-based browsers (Chrome, Brave, Arc, Edge) with authenticated session cookies.
 - **macOS System Integration**: Dynamic sleep prevention using `caffeinate` during active transfers, menu bar status item, and system notification alerts.
