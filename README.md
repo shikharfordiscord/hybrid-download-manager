@@ -2,6 +2,9 @@
 
 A desktop download manager designed for macOS that combines high-concurrency multi-connection downloading with BitTorrent support, automated split archive processing, and browser download interception.
 
+[![Latest Release](https://img.shields.io/github/v/release/shikharfordiscord/hybrid-download-manager?label=Download%20for%20macOS&color=007AFF)](https://github.com/shikharfordiscord/hybrid-download-manager/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ---
 
 ## Architecture Overview
