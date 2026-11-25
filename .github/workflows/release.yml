@@ -1,0 +1,121 @@
+name: Build & Release
+
+# Triggered by version tags (v*) or manually from the Actions tab
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # Required to create GitHub Releases and upload assets
+
+# ════════════════════════════════════════════════════════════════════════
+#  Job 1: Build macOS binary (.app → zip)
+# ════════════════════════════════════════════════════════════════════════
+jobs:
+  build-macos:
+    name: Build macOS App
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install aria2 and sevenzip via Homebrew
+        run: brew install aria2 sevenzip
+
+      - name: Run macOS bundle script
+        run: chmod +x bundle_app.sh && ./bundle_app.sh
+
+      - name: Zip macOS .app bundle
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            "hydownload managers.app" \
+            "HyDownload-Manager-macOS.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: dist/HyDownload-Manager-macOS.zip
+          retention-days: 1
+
+# ════════════════════════════════════════════════════════════════════════
+#  Job 2: Build Windows binary (folder → zip)
+# ════════════════════════════════════════════════════════════════════════
+  build-windows:
+    name: Build Windows App
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install aria2 and 7zip via Chocolatey
+        run: choco install aria2 7zip -y
+
+      - name: Run Windows build script
+        run: powershell -ExecutionPolicy Bypass -File build_windows.ps1
+
+      - name: Zip Windows distribution folder
+        run: |
+          Compress-Archive `
+            -Path "dist\hydownload managers\*" `
+            -DestinationPath "dist\HyDownload-Manager-Windows.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/HyDownload-Manager-Windows.zip
+          retention-days: 1
+
+# ════════════════════════════════════════════════════════════════════════
+#  Job 3: Publish GitHub Release with both platform ZIPs
+# ════════════════════════════════════════════════════════════════════════
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-build
+          path: artifacts/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: artifacts/
+
+      - name: Create GitHub Release and upload both ZIPs
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/HyDownload-Manager-macOS.zip
+            artifacts/HyDownload-Manager-Windows.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

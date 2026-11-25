@@ -69,25 +69,51 @@ class Aria2Engine:
         if explicit_path and os.path.isfile(explicit_path):
             return explicit_path
 
-        # 1. Check PyInstaller _MEIPASS bundle
+        is_win = sys.platform == "win32"
+        bin_name = "aria2c.exe" if is_win else "aria2c"
+
+        # 1. Check PyInstaller _MEIPASS bundle (works on both macOS and Windows)
         if hasattr(sys, "_MEIPASS"):
-            bundle_p = Path(sys._MEIPASS) / "bin" / "aria2c"
+            bundle_p = Path(sys._MEIPASS) / "bin" / bin_name
             if bundle_p.is_file():
                 return str(bundle_p)
 
-        # 2. Check macOS .app bundle paths (Contents/Resources/bin, Contents/Frameworks/bin)
         exe_dir = Path(sys.executable).parent
-        contents_dir = exe_dir.parent
-        for sub in ("Resources/bin/aria2c", "Frameworks/bin/aria2c", "MacOS/bin/aria2c"):
-            app_p = contents_dir / sub
-            if app_p.is_file():
-                return str(app_p)
 
-        # 3. Check PATH and standard homebrew locations
-        for cand in ("aria2c", "/opt/homebrew/bin/aria2c", "/usr/local/bin/aria2c"):
-            p = shutil.which(cand) or (cand if os.path.isfile(cand) else None)
-            if p:
-                return str(p)
+        if is_win:
+            # 2. Windows: check next to the .exe (dev mode staging)
+            dev_p = exe_dir / "bin" / bin_name
+            if dev_p.is_file():
+                return str(dev_p)
+
+            # 3. Windows: common install locations
+            win_candidates = [
+                Path(os.environ.get("LOCALAPPDATA", "")) / "aria2" / "aria2c.exe",
+                Path("C:/ProgramData/chocolatey/bin/aria2c.exe"),
+                Path("C:/Program Files/aria2/aria2c.exe"),
+                Path("C:/Program Files (x86)/aria2/aria2c.exe"),
+            ]
+            for p in win_candidates:
+                if p.is_file():
+                    return str(p)
+        else:
+            # 2. macOS .app bundle paths (Contents/Resources/bin, Contents/Frameworks/bin)
+            contents_dir = exe_dir.parent
+            for sub in ("Resources/bin/aria2c", "Frameworks/bin/aria2c", "MacOS/bin/aria2c"):
+                app_p = contents_dir / sub
+                if app_p.is_file():
+                    return str(app_p)
+
+            # 3. macOS: PATH and standard Homebrew locations
+            for cand in ("aria2c", "/opt/homebrew/bin/aria2c", "/usr/local/bin/aria2c"):
+                p = shutil.which(cand) or (cand if os.path.isfile(cand) else None)
+                if p:
+                    return str(p)
+
+        # 4. Generic PATH search (last resort, any OS)
+        found = shutil.which(bin_name)
+        if found:
+            return found
         return None
 
     def __init__(
@@ -108,8 +134,13 @@ class Aria2Engine:
         # Locate the aria2c binary
         self._aria2c_bin = self._find_aria2c(aria2c_path)
         if not self._aria2c_bin:
+            install_hint = (
+                "choco install aria2  (or download from https://github.com/aria2/aria2/releases)"
+                if sys.platform == "win32"
+                else "brew install aria2"
+            )
             raise Aria2EngineError(
-                "aria2c not found on PATH or app bundle. Install it with: brew install aria2"
+                f"aria2c not found on PATH or app bundle. Install it with: {install_hint}"
             )
 
         # Runtime state (populated after .start())
@@ -163,14 +194,20 @@ class Aria2Engine:
         cmd = self._build_command()
         logger.info("Starting aria2c: %s", " ".join(cmd))
 
-        # Launch as a hidden daemon-like subprocess
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+        # Build platform-specific Popen kwargs
+        popen_kwargs: dict = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
+        }
+        if platform.system() == "Windows":
+            # Suppress the black console window that would flash on screen
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        else:
             # Prevent the child from receiving Ctrl-C meant for the parent
-            preexec_fn=os.setpgrp if platform.system() != "Windows" else None,
-        )
+            popen_kwargs["preexec_fn"] = os.setpgrp
+
+        # Launch as a hidden daemon-like subprocess
+        self._process = subprocess.Popen(cmd, **popen_kwargs)
 
         # Wait for the RPC port to become responsive
         if not self._wait_for_rpc():
@@ -185,8 +222,11 @@ class Aria2Engine:
 
         # Register cleanup handlers
         atexit.register(self.stop)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
+        # SIGTERM and SIGINT don't exist on Windows; guard accordingly
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, self._signal_handler)
+        if hasattr(signal, "SIGINT"):
+            signal.signal(signal.SIGINT, self._signal_handler)
 
         logger.info(
             "aria2c ready — RPC on port %d, download dir: %s",
@@ -263,7 +303,7 @@ class Aria2Engine:
             "--continue=true",                 # resume partial downloads
             "--max-concurrent-downloads=5",
             "--max-overall-download-limit=0",  # unlimited
-            "--file-allocation=falloc",        # fast pre-allocation on APFS
+            "--file-allocation=falloc",        # fast pre-allocation (APFS on macOS, NTFS on Windows)
 
             # ── BitTorrent / DHT ────────────────────────────────────────
             "--enable-dht=true",

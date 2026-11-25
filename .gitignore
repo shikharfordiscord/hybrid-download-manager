@@ -31,6 +31,12 @@ venv.bak/
 .Spotlight-V100
 .Trashes
 
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
 # Download & temporary test artifacts
 *.aria2
 *.torrent

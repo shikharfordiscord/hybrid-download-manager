@@ -5,7 +5,7 @@ Combines:
   1. Live Download Queue Table with progress bar delegates & real-time stats
   2. Smart Multi-Part Archive Manager with split-archive link parsing, sequential queuing & auto-extraction
   3. Browser Interceptor & Clipboard Monitor (instant download catching)
-  4. macOS Polish: Menu Bar Tray Icon, Sleep Prevention (caffeinate), Native Notifications
+  4. Cross-Platform Polish: Menu Bar Tray Icon, Sleep Prevention, Native Notifications
 """
 
 from __future__ import annotations
@@ -73,7 +73,17 @@ from PyQt6.QtWidgets import (
 from browser_interceptor import BrowserInterceptorServer
 from download_controller import DownloadController, DownloadStats, DownloadType
 from engine_manager import Aria2Engine, Aria2EngineError
-from macos_service import CaffeinateManager, reveal_in_finder, send_macos_notification, get_resource_path
+from platform_service import (
+    SleepPreventer,
+    reveal_in_finder,
+    send_notification,
+    get_resource_path,
+    get_monospace_font,
+    get_app_style,
+    get_sleep_label,
+    get_reveal_label,
+    IS_MACOS,
+)
 from repack_manager import RepackGroup, RepackManager, RepackStatus
 
 logger = logging.getLogger(__name__)
@@ -99,7 +109,7 @@ QUEUE_COLUMNS = ["File Name", "Size", "Progress", "Speed", "ETA / Time Taken", "
 # ════════════════════════════════════════════════════════════════════════
 
 class ProgressBarDelegate(QStyledItemDelegate):
-    """Paints a native macOS-styled progress bar inside table cells."""
+    """Paints a native-styled progress bar inside table cells."""
 
     def paint(self, painter: QPainter, option, index: QModelIndex):
         progress = index.data(Qt.ItemDataRole.UserRole)
@@ -301,7 +311,7 @@ class DownloadDetailsDialog(QDialog):
 
         # Action Buttons
         btn_box = QHBoxLayout()
-        btn_reveal = QPushButton("📂 Reveal in Finder")
+        btn_reveal = QPushButton(f"📂 {get_reveal_label()}")
         btn_reveal.clicked.connect(lambda: reveal_in_finder(dest_path))
         btn_box.addWidget(btn_reveal)
         btn_box.addStretch()
@@ -336,7 +346,7 @@ class MainWindow(QMainWindow):
 
         self.ctrl = DownloadController(self.engine)
         self.repack_mgr = RepackManager(self.ctrl, default_dir=DEFAULT_DOWNLOAD_DIR)
-        self.caffeinate = CaffeinateManager()
+        self.caffeinate = SleepPreventer()
         self.last_completed_gids: set[str] = set()
         self.known_clipboard_text = ""
 
@@ -562,7 +572,7 @@ class MainWindow(QMainWindow):
         self.chk_clipboard.setChecked(True)
         form.addRow("Clipboard Monitor:", self.chk_clipboard)
 
-        self.chk_caffeinate = QCheckBox("Prevent Mac sleep during active downloads (caffeinate)")
+        self.chk_caffeinate = QCheckBox(get_sleep_label())
         self.chk_caffeinate.setChecked(True)
         self.chk_caffeinate.toggled.connect(lambda v: setattr(self.caffeinate, "enabled", v))
         form.addRow("Power Management:", self.chk_caffeinate)
@@ -600,7 +610,8 @@ class MainWindow(QMainWindow):
     def _build_status_bar(self):
         sb = self.statusBar()
         self.lbl_global_speed = QLabel("↓ 0 B/s   ↑ 0 B/s")
-        self.lbl_global_speed.setFont(QFont("Menlo", 11))
+        _font_name, _font_size = get_monospace_font()
+        self.lbl_global_speed.setFont(QFont(_font_name, _font_size))
         sb.addPermanentWidget(self.lbl_global_speed)
 
         self.lbl_queue_status = QLabel("Active: 0   Waiting: 0")
@@ -714,7 +725,7 @@ class MainWindow(QMainWindow):
         m.addAction("Pause", self._on_pause_selected)
         m.addAction("Resume", self._on_resume_selected)
         m.addSeparator()
-        m.addAction("Reveal in Finder", self._on_reveal_selected)
+        m.addAction(get_reveal_label(), self._on_reveal_selected)
         m.addAction("Delete", self._on_delete_selected)
         m.exec(self.table.viewport().mapToGlobal(pos))
 
@@ -803,7 +814,7 @@ class MainWindow(QMainWindow):
             if s.is_complete and not s.is_metadata and s.gid not in self.last_completed_gids:
                 self.last_completed_gids.add(s.gid)
                 notif_msg = f"{s.name}\nCompleted in {s.duration_human} (Avg: {s.avg_speed_human}, Peak: {s.max_speed_human})"
-                send_macos_notification("Download Complete", notif_msg, APP_NAME)
+                send_notification("Download Complete", notif_msg, APP_NAME, tray_icon=self.tray)
 
         # Clean any removed metadata tasks from order
         self.gids_order = [g for g in self.gids_order if g not in meta_replaced]
@@ -933,7 +944,7 @@ class MainWindow(QMainWindow):
         try:
             dl = self.ctrl.add(url, download_dir=DEFAULT_DOWNLOAD_DIR, options=options)
             self.gids_order.append(dl.gid)
-            send_macos_notification("Caught from Browser", fname or dl.name, APP_NAME)
+            send_notification("Caught from Browser", fname or dl.name, APP_NAME, tray_icon=self.tray)
             self._restore_from_tray()
         except Exception as e:
             logger.error("Failed to add intercepted download: %s", e)
@@ -1022,7 +1033,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
-    app.setStyle("macOS")
+    app.setStyle(get_app_style())
 
     window = MainWindow()
     window.show()

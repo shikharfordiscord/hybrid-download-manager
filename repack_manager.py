@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -150,24 +151,56 @@ class RepackManager:
 
     @staticmethod
     def _find_7z() -> Optional[str]:
-        """Locate 7zz, 7z, or unar on macOS, including inside .app bundles."""
+        """Locate 7z / 7zz on the current platform, including inside app bundles."""
         import sys
+        is_win = sys.platform == "win32"
+
+        # 1. PyInstaller frozen environment (_MEIPASS — works on macOS and Windows)
         if hasattr(sys, "_MEIPASS"):
-            b7z = Path(sys._MEIPASS) / "bin" / "7zz"
-            if b7z.is_file():
-                return str(b7z)
+            for name in ("7z.exe" if is_win else "7zz", "7z"):
+                b7z = Path(sys._MEIPASS) / "bin" / name
+                if b7z.is_file():
+                    return str(b7z)
 
         exe_dir = Path(sys.executable).parent
-        contents_dir = exe_dir.parent
-        for sub in ("Resources/bin/7zz", "Frameworks/bin/7zz", "MacOS/bin/7zz"):
-            app_p = contents_dir / sub
-            if app_p.is_file():
-                return str(app_p)
 
-        for candidate in ("7zz", "7z", "/opt/homebrew/bin/7zz", "/usr/local/bin/7zz", "unar"):
-            p = shutil.which(candidate) or (candidate if os.path.isfile(candidate) else None)
-            if p:
-                return str(p)
+        if is_win:
+            # 2. Windows: check next to the .exe (dev mode staging)
+            for name in ("7z.exe", "7zz.exe"):
+                dev_p = exe_dir / "bin" / name
+                if dev_p.is_file():
+                    return str(dev_p)
+
+            # 3. Windows: common 7-Zip install locations
+            win_candidates = [
+                Path("C:/Program Files/7-Zip/7z.exe"),
+                Path("C:/Program Files (x86)/7-Zip/7z.exe"),
+                Path(os.environ.get("LOCALAPPDATA", "")) / "7-Zip" / "7z.exe",
+                Path(os.environ.get("PROGRAMFILES", "")) / "7-Zip" / "7z.exe",
+            ]
+            for p in win_candidates:
+                if p.is_file():
+                    return str(p)
+
+            # 4. Windows: PATH search
+            for name in ("7z", "7zz"):
+                found = shutil.which(name)
+                if found:
+                    return found
+        else:
+            # 2. macOS .app bundle paths
+            contents_dir = exe_dir.parent
+            for sub in ("Resources/bin/7zz", "Frameworks/bin/7zz", "MacOS/bin/7zz"):
+                app_p = contents_dir / sub
+                if app_p.is_file():
+                    return str(app_p)
+
+            # 3. macOS: PATH and standard Homebrew locations
+            for candidate in ("7zz", "7z", "/opt/homebrew/bin/7zz", "/usr/local/bin/7zz", "unar"):
+                p = shutil.which(candidate) or (candidate if os.path.isfile(candidate) else None)
+                if p:
+                    return str(p)
+
         return None
 
     # ── Multi-Part Parser & Clustering ─────────────────────────────────
@@ -422,10 +455,14 @@ class RepackManager:
         return h.hexdigest()
 
     def extract_group(self, group: RepackGroup) -> None:
-        """Finds the primary archive part and extracts it using 7zz / unar."""
+        """Finds the primary archive part and extracts it using 7z / 7zz / unar."""
         if not self._seven_zip_bin:
+            if sys.platform == "win32":
+                hint = "choco install 7zip  (or install from https://www.7-zip.org/)"
+            else:
+                hint = "brew install sevenzip"
             raise RuntimeError(
-                "Neither 7zz, 7z nor unar found! Install with: brew install sevenzip"
+                f"7z/7zz not found! Install with: {hint}"
             )
 
         # Find the starting file (part1, part01, or first .rar/.7z/.001)
@@ -439,18 +476,21 @@ class RepackManager:
         logger.info("Extracting %s -> %s using %s", first_file.name, out_dir, self._seven_zip_bin)
         group.status_message = f"Extracting {first_file.name}..."
 
-        # Run 7zz extraction: x = extract with full paths, -y = assume yes on all queries, -o = out dir
+        # Run 7z extraction: x = extract with full paths, -y = assume yes on all queries, -o = out dir
         if "7z" in Path(self._seven_zip_bin).name:
             cmd = [self._seven_zip_bin, "x", "-y", f"-o{out_dir}", str(first_file)]
         else: # unar
             cmd = [self._seven_zip_bin, "-o", str(out_dir), "-f", str(first_file)]
 
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        popen_kwargs: dict = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+        }
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        proc = subprocess.Popen(cmd, **popen_kwargs)
         stdout, stderr = proc.communicate()
 
         if proc.returncode != 0:
